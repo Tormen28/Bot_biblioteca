@@ -101,6 +101,9 @@ DB_PORT=5432
 DB_NAME=biblio_bot
 DB_USER=postgres
 DB_PASSWORD=tu_password
+
+# Admin Configuration (IDs separados por comas)
+ADMIN_IDS=123456789,987654321
 ```
 
 ## 🎯 Comandos Disponibles
@@ -115,7 +118,7 @@ DB_PASSWORD=tu_password
 - `/adduser <id> <role>` - Autorizar nuevo usuario
 - `/removeuser <id>` - Revocar autorización
 - `/listusers` - Listar usuarios autorizados
-- `/uploadbook` - Instrucciones para subir documentos
+- `/upload` - Subir documento paso a paso
 
 ### Menú Interactivo
 - 📋 **Documentos** - Explorar biblioteca por categorías
@@ -178,6 +181,14 @@ Esta versión incluye mejoras significativas en UI/UX:
 - ✅ Emojis y animaciones en mensajes
 - ✅ Navegación intuitiva
 - ✅ Sistema robusto de base de datos
+- ✅ Validación de entrada mejorada
+- ✅ Botones de cancelación en workflows
+
+## 🔒 Seguridad
+
+- Las credenciales sensibles nunca se incluyen en el código fuente
+- Los IDs de administradores se gestionan en el archivo `.env`
+- El archivo `.env` está excluido del repositorio mediante `.gitignore`
 
 ---
 
