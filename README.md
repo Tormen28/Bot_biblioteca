@@ -1,6 +1,6 @@
 # 📚 BiblioBot Beta - Sistema de Biblioteca Virtual
 
-Versión completa del bot de biblioteca virtual para Telegram con interfaz moderna y PostgreSQL.
+Bot de biblioteca virtual para **Telegram**: catálogo de documentos por materias, control de acceso por roles y una interfaz con paginación. Funciona con **PostgreSQL** (Supabase/Neon) o con **SQLite local** sin configurar nada.
 
 ## ✨ Características
 
@@ -9,7 +9,8 @@ Versión completa del bot de biblioteca virtual para Telegram con interfaz moder
 - 🔍 **Búsqueda Avanzada**: Búsqueda por título, autor o categoría
 - 📄 **Vista de Detalles**: Información completa antes de descargar
 - 📱 **Interfaz Moderna**: Paginación, emojis y navegación intuitiva
-- 🗄️ **Base de Datos PostgreSQL**: Almacenamiento robusto y escalable
+- 🗄️ **Base de datos**: PostgreSQL (Supabase/Neon) o **SQLite local automático** si no configuras ninguna
+- 📄 **Reportes PDF**: informes de usuarios y de documentos desde el propio bot
 
 ## 🚀 Configuración Rápida (Para Nuevos Usuarios)
 
