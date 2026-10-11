@@ -11,54 +11,45 @@ Versión completa del bot de biblioteca virtual para Telegram con interfaz moder
 - 📱 **Interfaz Moderna**: Paginación, emojis y navegación intuitiva
 - 🗄️ **Base de Datos PostgreSQL**: Almacenamiento robusto y escalable
 
-## 🚀 Configuración Rápida
+## 🚀 Configuración Rápida (Para Nuevos Usuarios)
 
-### 1. Crear Bot de Telegram
-1. Ve a [@BotFather](https://t.me/botfather) en Telegram
-2. Envía `/newbot` y sigue las instrucciones
-3. Copia el TOKEN que te proporciona
+Sigue estos pasos en orden para no tener errores:
 
-### 2. Configurar Base de Datos PostgreSQL
+### 1. Requisitos del Sistema
+- **Python Recomendado**: **3.12** (es la más compatible). 
+- *Nota*: Si usas **3.14**, asegúrate de tener instaladas las "C++ Build Tools" de Windows.
+
+### 2. Preparar el Entorno
+1. Descarga el código.
+2. Abre una terminal en la carpeta del proyecto.
+3. Ejecuta: `pip install -r requirements.txt`
+
+### 3. Configurar Credenciales
+1. Copia el archivo `.env.example` y cámbiale el nombre a `.env`. (En Windows: `copy .env.example .env`)
+2. Abre el archivo `.env` con un bloc de notas y pon tu `BOT_TOKEN` y tu `ADMIN_IDS`.
+3. Si usas PostgreSQL (Supabase/Neon), pon tu URL en `POSTGRES_URL`. Si no, deja todo como está y se creará una base de datos local automáticamente.
+
+### 4. Iniciar el Bot (MÉTODO RECOMENDADO)
+Simplemente haz doble clic en el archivo:
+👉 **`iniciar_bot.bat`**
+
+Este archivo hará todo por ti: verificará Python, instalará las librerías necesarias y encenderá el bot.
+
+### 5. Iniciar manualmente (Alternativa)
+Si prefieres usar la terminal:
 ```bash
-# Opción A: PostgreSQL Local
-createdb biblio_bot
-createuser biblio_bot_user
-psql -c "ALTER USER biblio_bot_user PASSWORD 'your_password';"
-psql -c "GRANT ALL PRIVILEGES ON DATABASE biblio_bot TO biblio_bot_user;"
-
-# Opción B: Servicios en la Nube
-# - Railway, Supabase, ElephantSQL, etc.
-```
-
-### 3. Configurar Variables de Entorno
-```bash
-cp .env.example .env
-# Edita .env con tus credenciales
-```
-
-### 4. Instalar y Ejecutar
-```bash
-# Instalar dependencias
-pip install -r requirements.txt
-
-# Configurar base de datos
-python setup_db.py
-
-# Ejecutar bot (desarrollo)
 python bot.py
 ```
 
 ## 🖥️ Despliegue 24/7 en VPS
 
 ### Requisitos
-- VPS Ubuntu/Debian ($10-30/mes)
-- Dominio con SSL
-- PostgreSQL en el servidor
+- VPS Ubuntu/Debian
+- Dominio con SSL (opcional para polling, necesario para webhook)
 
 ### Pasos de Despliegue
 1. **Configurar VPS:**
    ```bash
-   # Ejecutar script de despliegue
    chmod +x deploy.sh
    sudo ./deploy.sh
    ```
@@ -92,8 +83,9 @@ python bot.py
 # Telegram Bot
 BOT_TOKEN=tu_token_de_telegram
 
-# PostgreSQL (URL completa - recomendado)
-POSTGRES_URL=postgresql://usuario:password@host:puerto/database
+# PostgreSQL (URL completa - recomendado para Supabase, Neon, etc.)
+# Ejemplo: postgresql://usuario:password@host:5432/neondb
+POSTGRES_URL=tu_url_aqui
 
 # O configuración individual
 DB_HOST=localhost
@@ -102,8 +94,8 @@ DB_NAME=biblio_bot
 DB_USER=postgres
 DB_PASSWORD=tu_password
 
-# Admin Configuration (IDs separados por comas)
-ADMIN_IDS=123456789,987654321
+# Admin Configuration (Tu ID de Telegram, consíguelo con @userinfobot)
+ADMIN_IDS=123456789
 ```
 
 ## 🎯 Comandos Disponibles
@@ -147,23 +139,24 @@ ADMIN_IDS=123456789,987654321
 
 3. Gestiona usuarios desde el menú "👥 Gestionar" (guiado paso a paso)
 
-## 🛠️ Solución de Problemas
+## 🛠️ Solución de Problemas (FAQ)
 
-### Error de Conexión a Base de Datos
-```bash
-# Verificar configuración
-python setup_db.py
-```
+### ❓ El script de configuración dice que falta 'asyncpg' o 'aiogram'
+**Solución**: No ejecutaste la instalación de dependencias. Ejecuta `pip install -r requirements.txt`.
 
-### Bot No Responde
-- Verifica que el TOKEN sea correcto
-- Asegúrate de que el bot esté ejecutándose
-- Revisa los logs en la consola
+### ❓ No puedo conectar a PostgreSQL
+**Solución**: 
+- El bot ahora intenta conectar con **SSL automáticamente** si falla la normal. 
+- Verifica que en tu servicio (Supabase/Neon) hayas permitido las conexiones desde cualquier IP (0.0.0.0/0) si es necesario.
 
-### Problemas de Dependencias
-```bash
-pip install --upgrade -r requirements.txt
-```
+### ❓ El bot se cierra solo al iniciar
+**Solución**: Revisa el archivo `.env`. Asegúrate de que el TOKEN no tenga espacios extra.
+
+### ❓ Tengo Python 3.14 y me da error de 'C++ Build Tools'
+**Solución**: Python 3.14 es muy nuevo. Lo más fácil es instalar **Python 3.12.x**. Si quieres seguir en 3.14, debes instalar el componente "Desktop development with C++" de Visual Studio Installer.
+
+### ❓ Los reportes PDF no se generan
+**Solución**: Asegúrate de tener `reportlab` instalado. El archivo `requirements.txt` ya lo incluye, pero si instalaste las dependencias manualmente, ejecuta: `pip install reportlab`
 
 ## 📊 Características Técnicas
 

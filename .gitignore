@@ -29,3 +29,5 @@ Thumbs.db
 
 # Logs
 *.log
+error_log.txt
+stderr.log

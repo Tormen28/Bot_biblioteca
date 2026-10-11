@@ -17,19 +17,27 @@ async def main():
     print("=" * 40)
 
     # Check environment variables
+    if not os.path.exists('.env'):
+        print("⚠️ ARCHIVO .ENV NO ENCONTRADO.")
+        print("Copia .env.example a .env y configura tus credenciales.")
+        if os.path.exists('.env.example'):
+            print("Sugerencia: ejecuta 'copy .env.example .env' en Windows")
+        print("-" * 40)
+
     db_url = os.getenv('POSTGRES_URL')
     if not db_url:
-        print("No POSTGRES_URL found in environment variables.")
-        print("The system will use SQLite as fallback.")
-        print("To use PostgreSQL, set up your .env file based on .env.example")
-        print("\nRequired for PostgreSQL:")
-        print("   POSTGRES_URL=postgresql://user:password@host:port/database")
-        # Continue with SQLite fallback
-
-    if db_url:
-        print(f"Database URL: {db_url.replace(db_url.split('@')[0].split(':')[1], '***')}")
+        print("No se encontró POSTGRES_URL en las variables de entorno.")
+        print("El sistema usará SQLite como alternativa (biblio_bot.db).")
     else:
-        print("Database URL: Using SQLite fallback")
+        # Safer URL masking
+        try:
+            if '@' in db_url and ':' in db_url.split('@')[0]:
+                masked_url = db_url.replace(db_url.split('@')[0].split(':')[1], '***', 1)
+                print(f"URL de Base de Datos: {masked_url}")
+            else:
+                print(f"URL de Base de Datos: {db_url}")
+        except Exception:
+            print("URL de Base de Datos configurada.")
 
     # Test connection
     print("\nTesting database connection...")

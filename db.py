@@ -2,8 +2,18 @@ import os
 import asyncio
 import logging
 from typing import Optional, List
-import asyncpg
-from asyncpg import Pool
+
+try:
+    import asyncpg
+    from asyncpg import Pool
+except ImportError:
+    asyncpg = None
+    Pool = None
+
+try:
+    import aiosqlite
+except ImportError:
+    aiosqlite = None
 from dotenv import load_dotenv
 
 # Load environment variables from .env if present
@@ -34,24 +44,47 @@ async def create_pool() -> Pool:
     global _pool, _use_sqlite
 
     if _pool is None:
-        # Try PostgreSQL first
         try:
-            _pool = await asyncpg.create_pool(
-                DB_URL,
-                min_size=1,
-                max_size=10,
-                command_timeout=60,
-                max_inactive_connection_lifetime=300,
-            )
+            if asyncpg is None:
+                raise ImportError("La librería 'asyncpg' no está instalada. Ejecuta: pip install asyncpg")
+
+            # Intentar conexión con parámetros estándar
+            try:
+                _pool = await asyncpg.create_pool(
+                    DB_URL,
+                    min_size=1,
+                    max_size=10,
+                    command_timeout=60,
+                    max_inactive_connection_lifetime=300,
+                )
+            except Exception as e:
+                # Si falla, intentar con SSL (necesario para Supabase/Railway/Neon)
+                logger.info(f"Conexión estándar falló, reintentando con SSL... ({e})")
+                _pool = await asyncpg.create_pool(
+                    DB_URL,
+                    ssl=True,
+                    min_size=1,
+                    max_size=10,
+                    command_timeout=60,
+                    max_inactive_connection_lifetime=300,
+                )
+            
             logger.info("✅ PostgreSQL connection pool created successfully")
         except Exception as e:
-            logger.warning(f"PostgreSQL connection failed: {e}")
+            logger.warning(f"❌ PostgreSQL connection failed: {e}")
+            if "ssl" in str(e).lower():
+                logger.error("Sugerencia: Tu base de datos requiere SSL. Verifica tu POSTGRES_URL.")
+            elif "authentication" in str(e).lower() or "password" in str(e).lower():
+                logger.error("Sugerencia: Usuario o contraseña incorrectos en el archivo .env")
+            elif "timeout" in str(e).lower() or "connection refused" in str(e).lower():
+                logger.error("Sugerencia: No se pudo alcanzar el servidor. Verifica que no esté bloqueado por un firewall o que la IP esté permitida.")
             logger.info("🔄 Falling back to SQLite...")
 
             # Fallback to SQLite
             _use_sqlite = True
             try:
-                import aiosqlite
+                if aiosqlite is None:
+                    raise ImportError("La librería 'aiosqlite' no está instalada. Ejecuta: pip install aiosqlite")
                 _pool = await aiosqlite.connect('biblio_bot.db')
                 await _pool.execute('PRAGMA foreign_keys = ON')
                 logger.info("✅ SQLite connection established successfully")
@@ -95,6 +128,7 @@ async def init_db():
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id_telegram INTEGER PRIMARY KEY,
+                    username TEXT,
                     role TEXT NOT NULL CHECK (role IN ('admin', 'reader')),
                     authorized_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     authorized_by TEXT
@@ -109,12 +143,20 @@ async def init_db():
                     title TEXT NOT NULL,
                     author TEXT NOT NULL,
                     subject TEXT NOT NULL,
+                    description TEXT,
                     size_bytes INTEGER NOT NULL,
                     url_external TEXT,
                     uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     uploaded_by INTEGER REFERENCES users(user_id_telegram)
                 )
             ''')
+
+            # Add description column if it doesn't exist (migration)
+            try:
+                await conn.execute('ALTER TABLE books ADD COLUMN description TEXT')
+                await conn.commit()
+            except:
+                pass  # Column already exists
 
             # Create indexes for better performance
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_books_subject ON books(subject)')
@@ -136,6 +178,7 @@ async def init_db():
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id_telegram BIGINT PRIMARY KEY,
+                    username TEXT,
                     role TEXT NOT NULL CHECK (role IN ('admin', 'reader')),
                     authorized_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     authorized_by TEXT
@@ -150,12 +193,19 @@ async def init_db():
                     title TEXT NOT NULL,
                     author TEXT NOT NULL,
                     subject TEXT NOT NULL,
+                    description TEXT,
                     size_bytes BIGINT NOT NULL,
                     url_external TEXT,
                     uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     uploaded_by BIGINT REFERENCES users(user_id_telegram)
                 )
             ''')
+
+            # Add description column if it doesn't exist (migration)
+            try:
+                await conn.execute('ALTER TABLE books ADD COLUMN description TEXT')
+            except:
+                pass  # Column already exists
 
             # Create indexes for better performance
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_books_subject ON books(subject)')
@@ -197,8 +247,9 @@ async def test_connection() -> bool:
         return False
 
 class User:
-    def __init__(self, user_id_telegram, role, authorized_at, authorized_by):
+    def __init__(self, user_id_telegram, username, role, authorized_at, authorized_by):
         self.user_id_telegram = user_id_telegram
+        self.username = username
         self.role = role
         self.authorized_at = authorized_at
         self.authorized_by = authorized_by
@@ -214,7 +265,14 @@ async def get_user(user_id: int) -> Optional[User]:
             row = await conn.fetchrow('SELECT * FROM users WHERE user_id_telegram = $1', user_id)
 
         if row:
-            return User(row[0], row[1], row[2], row[3])
+            # Access by column name to avoid index issues
+            return User(
+                row['user_id_telegram'] if isinstance(row, dict) or hasattr(row, '__getitem__') and not isinstance(row, tuple) else row[0],
+                row['username'] if isinstance(row, dict) or hasattr(row, '__getitem__') and not isinstance(row, tuple) else row[1],
+                row['role'] if isinstance(row, dict) or hasattr(row, '__getitem__') and not isinstance(row, tuple) else row[2],
+                row['authorized_at'] if isinstance(row, dict) or hasattr(row, '__getitem__') and not isinstance(row, tuple) else row[3],
+                row['authorized_by'] if isinstance(row, dict) or hasattr(row, '__getitem__') and not isinstance(row, tuple) else row[4]
+            )
         return None
     except Exception as e:
         logger.error(f"Error getting user {user_id}: {e}")
@@ -222,25 +280,28 @@ async def get_user(user_id: int) -> Optional[User]:
     finally:
         await release_connection(conn)
 
-async def add_user(user_id: int, role: str, authorized_by: Optional[str]):
+async def add_user(user_id: int, username: Optional[str], role: str, authorized_by: Optional[str]):
     """Add a new user to the database"""
     if role not in ['admin', 'reader']:
         raise ValueError("Role must be 'admin' or 'reader'")
+
+    # Convert authorized_by to string if it's an int
+    authorized_by_str = str(authorized_by) if authorized_by is not None else None
 
     conn = await get_connection()
     try:
         if _use_sqlite:
             await conn.execute(
-                'INSERT INTO users (user_id_telegram, role, authorized_by) VALUES (?, ?, ?)',
-                (user_id, role, authorized_by)
+                'INSERT INTO users (user_id_telegram, username, role, authorized_by) VALUES (?, ?, ?, ?)',
+                (user_id, username, role, authorized_by_str)
             )
             await conn.commit()
         else:
             await conn.execute(
-                'INSERT INTO users (user_id_telegram, role, authorized_by) VALUES ($1, $2, $3)',
-                user_id, role, authorized_by
+                'INSERT INTO users (user_id_telegram, username, role, authorized_by) VALUES ($1, $2, $3, $4)',
+                user_id, username, role, authorized_by_str
             )
-        logger.info(f"User {user_id} added with role {role}")
+        logger.info(f"User {user_id} ({username}) added with role {role}")
     except Exception as e:
         if "UNIQUE constraint failed" in str(e) or "duplicate key value" in str(e):
             logger.warning(f"User {user_id} already exists")
@@ -254,11 +315,14 @@ async def remove_user(user_id: int):
     """Remove a user from the database"""
     conn = await get_connection()
     try:
-        result = await conn.execute('DELETE FROM users WHERE user_id_telegram = $1', user_id)
-        if result == 'DELETE 0':
-            logger.warning(f"⚠️ User {user_id} not found for deletion")
+        if _use_sqlite:
+            await conn.execute('DELETE FROM users WHERE user_id_telegram = ?', (user_id,))
+            await conn.commit()
         else:
-            logger.info(f"✅ User {user_id} removed successfully")
+            result = await conn.execute('DELETE FROM users WHERE user_id_telegram = $1', user_id)
+            if result == 'DELETE 0':
+                logger.warning(f"⚠️ User {user_id} not found for deletion")
+        logger.info(f"✅ User {user_id} removed successfully")
     except Exception as e:
         logger.error(f"Error removing user {user_id}: {e}")
         raise
@@ -269,44 +333,69 @@ async def list_users() -> List[User]:
     """List all users in the database"""
     conn = await get_connection()
     try:
-        rows = await conn.fetch('SELECT * FROM users ORDER BY authorized_at DESC')
-        return [User(row['user_id_telegram'], row['role'], row['authorized_at'], row['authorized_by']) for row in rows]
+        if _use_sqlite:
+            cursor = await conn.execute('SELECT * FROM users ORDER BY authorized_at DESC')
+            rows = await cursor.fetchall()
+            # For SQLite, rows are tuples, need to handle by index
+            return [User(row[0], row[1], row[2], row[3], row[4]) for row in rows]
+        else:
+            rows = await conn.fetch('SELECT * FROM users ORDER BY authorized_at DESC')
+            return [User(row['user_id_telegram'], row['username'], row['role'], row['authorized_at'], row['authorized_by']) for row in rows]
     except Exception as e:
         logger.error(f"Error listing users: {e}")
         return []
     finally:
         await release_connection(conn)
 
+async def get_users_by_role(role: str) -> List[User]:
+    """Get users by role ('admin', 'reader', 'both')"""
+    if role == 'both':
+        return await list_users()
+    elif role in ['admin', 'reader']:
+        all_users = await list_users()
+        return [u for u in all_users if u.role == role]
+    else:
+        return []
+
 class Book:
-    def __init__(self, book_id, file_id_telegram, file_hash_sha256, title, author, subject, size_bytes, url_external, uploaded_at=None, uploaded_by=None):
+    def __init__(self, book_id, file_id_telegram, file_hash_sha256, title, author, subject, description, size_bytes, url_external, uploaded_at=None, uploaded_by=None):
         self.book_id = book_id
         self.file_id_telegram = file_id_telegram
         self.file_hash_sha256 = file_hash_sha256
         self.title = title
         self.author = author
         self.subject = subject
+        self.description = description
         self.size_bytes = size_bytes
         self.url_external = url_external
         self.uploaded_at = uploaded_at
         self.uploaded_by = uploaded_by
 
-async def add_book(file_id: str, file_unique_id: str, title: str, author: str, subject: str, size_bytes: int, uploaded_by: Optional[int] = None):
+async def add_book(file_id: str, file_unique_id: str, title: str, author: str, subject: str, size_bytes: int, uploaded_by: Optional[int] = None, description: Optional[str] = None):
     """Add a new book to the database"""
     if not all([file_id, title, author, subject]):
         raise ValueError("Missing required fields: file_id, title, author, subject")
 
     conn = await get_connection()
     try:
-        await conn.execute(
-            '''INSERT INTO books (file_id_telegram, file_hash_sha256, title, author, subject, size_bytes, uploaded_by)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)''',
-            file_id, file_unique_id, title, author, subject.lower().strip(), size_bytes, uploaded_by
-        )
+        if _use_sqlite:
+            await conn.execute(
+                '''INSERT INTO books (file_id_telegram, file_hash_sha256, title, author, subject, description, size_bytes, uploaded_by)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                (file_id, file_unique_id, title, author, subject.lower().strip(), description, size_bytes, uploaded_by)
+            )
+            await conn.commit()
+        else:
+            await conn.execute(
+                '''INSERT INTO books (file_id_telegram, file_hash_sha256, title, author, subject, description, size_bytes, uploaded_by)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)''',
+                file_id, file_unique_id, title, author, subject.lower().strip(), description, size_bytes, uploaded_by
+            )
         logger.info(f"✅ Book '{title}' added successfully by user {uploaded_by}")
-    except asyncpg.UniqueViolationError:
-        logger.warning(f"⚠️ Book with file_id {file_id} already exists")
-        raise ValueError(f"Book with file_id {file_id} already exists")
     except Exception as e:
+        if "UNIQUE constraint failed" in str(e) or "duplicate key value" in str(e):
+            logger.warning(f"⚠️ Book with file_id {file_id} already exists")
+            raise ValueError(f"Book with file_id {file_id} already exists")
         logger.error(f"Error adding book '{title}': {e}")
         raise
     finally:
@@ -316,36 +405,132 @@ async def get_books_by_subject(subject: str) -> List[Book]:
     """Get all books by subject (case-insensitive partial match)"""
     conn = await get_connection()
     try:
-        rows = await conn.fetch(
-            'SELECT * FROM books WHERE subject ILIKE $1 ORDER BY uploaded_at DESC',
-            f'%{subject}%'
-        )
-        return [Book(row['book_id'], row['file_id_telegram'], row['file_hash_sha256'],
-                    row['title'], row['author'], row['subject'], row['size_bytes'],
-                    row['url_external'], row['uploaded_at'], row['uploaded_by']) for row in rows]
+        if _use_sqlite:
+            cursor = await conn.execute(
+                'SELECT * FROM books WHERE subject LIKE ? COLLATE NOCASE ORDER BY uploaded_at DESC',
+                (f'%{subject}%',)
+            )
+            rows = await cursor.fetchall()
+            return [Book(row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10]) for row in rows]
+        else:
+            rows = await conn.fetch(
+                'SELECT * FROM books WHERE subject ILIKE $1 ORDER BY uploaded_at DESC',
+                f'%{subject}%'
+            )
+            return [Book(row['book_id'], row['file_id_telegram'], row['file_hash_sha256'],
+                         row['title'], row['author'], row['subject'], row['description'], row['size_bytes'],
+                         row['url_external'], row['uploaded_at'], row['uploaded_by']) for row in rows]
     except Exception as e:
         logger.error(f"Error getting books by subject '{subject}': {e}")
         return []
     finally:
         await release_connection(conn)
 
-async def search_books(query: str) -> List[Book]:
-    """Search books by title, author, or subject"""
+async def count_search_books(query: str) -> int:
+    """Count total search results for pagination"""
+    if not query or not query.strip():
+        return 0
+
+    conn = await get_connection()
+    try:
+        search_term = f'%{query.strip()}%'
+        if _use_sqlite:
+            cursor = await conn.execute(
+                '''SELECT COUNT(*) FROM books
+                   WHERE title LIKE ? COLLATE NOCASE OR author LIKE ? COLLATE NOCASE OR subject LIKE ? COLLATE NOCASE''',
+                (search_term, search_term, search_term)
+            )
+            result = await cursor.fetchone()
+            return result[0] if result else 0
+        else:
+            return await conn.fetchval(
+                '''SELECT COUNT(*) FROM books
+                   WHERE title ILIKE $1 OR author ILIKE $1 OR subject ILIKE $1''',
+                search_term
+            )
+    except Exception as e:
+        logger.error(f"Error counting search results for query '{query}': {e}")
+        return 0
+    finally:
+        await release_connection(conn)
+
+async def get_system_stats() -> dict:
+    """Get system statistics for dashboard"""
+    conn = await get_connection()
+    try:
+        stats = {}
+        if _use_sqlite:
+            # Total books
+            cursor = await conn.execute('SELECT COUNT(*) FROM books')
+            stats['total_books'] = (await cursor.fetchone())[0]
+
+            # Books by subject
+            cursor = await conn.execute('SELECT subject, COUNT(*) FROM books WHERE subject IS NOT NULL GROUP BY subject ORDER BY COUNT(*) DESC')
+            stats['books_by_subject'] = {row[0]: row[1] for row in await cursor.fetchall()}
+
+            # Total users
+            cursor = await conn.execute('SELECT COUNT(*) FROM users')
+            stats['total_users'] = (await cursor.fetchone())[0]
+
+            # Users by role
+            cursor = await conn.execute('SELECT role, COUNT(*) FROM users GROUP BY role')
+            stats['users_by_role'] = {row[0]: row[1] for row in await cursor.fetchall()}
+
+            # Recent uploads (last 30 days) - approximate
+            cursor = await conn.execute("SELECT COUNT(*) FROM books WHERE uploaded_at > datetime('now', '-30 days')")
+            stats['recent_uploads'] = (await cursor.fetchone())[0]
+        else:
+            # PostgreSQL
+            stats['total_books'] = await conn.fetchval('SELECT COUNT(*) FROM books')
+
+            rows = await conn.fetch('SELECT subject, COUNT(*) FROM books WHERE subject IS NOT NULL GROUP BY subject ORDER BY COUNT(*) DESC')
+            stats['books_by_subject'] = {row['subject']: row['count'] for row in rows}
+
+            stats['total_users'] = await conn.fetchval('SELECT COUNT(*) FROM users')
+
+            rows = await conn.fetch('SELECT role, COUNT(*) FROM users GROUP BY role')
+            stats['users_by_role'] = {row['role']: row['count'] for row in rows}
+
+            stats['recent_uploads'] = await conn.fetchval("SELECT COUNT(*) FROM books WHERE uploaded_at > CURRENT_TIMESTAMP - INTERVAL '30 days'")
+
+        return stats
+    except Exception as e:
+        logger.error(f"Error getting system stats: {e}")
+        return {}
+    finally:
+        await release_connection(conn)
+
+async def search_books(query: str, offset: int = 0, limit: int = None) -> List[Book]:
+    """Search books by title, author, or subject with pagination"""
     if not query or not query.strip():
         return []
 
     conn = await get_connection()
     try:
         search_term = f'%{query.strip()}%'
-        rows = await conn.fetch(
-            '''SELECT * FROM books
-               WHERE title ILIKE $1 OR author ILIKE $1 OR subject ILIKE $1
-               ORDER BY uploaded_at DESC''',
-            search_term
-        )
-        return [Book(row['book_id'], row['file_id_telegram'], row['file_hash_sha256'],
-                    row['title'], row['author'], row['subject'], row['size_bytes'],
-                    row['url_external'], row['uploaded_at'], row['uploaded_by']) for row in rows]
+        if _use_sqlite:
+            sql = '''SELECT * FROM books
+                     WHERE title LIKE ? COLLATE NOCASE OR author LIKE ? COLLATE NOCASE OR subject LIKE ? COLLATE NOCASE
+                     ORDER BY uploaded_at DESC'''
+            params = (search_term, search_term, search_term)
+            if limit is not None:
+                sql += ' LIMIT ? OFFSET ?'
+                params = params + (limit, offset)
+            cursor = await conn.execute(sql, params)
+            rows = await cursor.fetchall()
+            return [Book(row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10]) for row in rows]
+        else:
+            sql = '''SELECT * FROM books
+                     WHERE title ILIKE $1 OR author ILIKE $1 OR subject ILIKE $1
+                     ORDER BY uploaded_at DESC'''
+            params = [search_term]
+            if limit is not None:
+                sql += ' LIMIT $2 OFFSET $3'
+                params = [search_term, limit, offset]
+            rows = await conn.fetch(sql, *params)
+            return [Book(row['book_id'], row['file_id_telegram'], row['file_hash_sha256'],
+                         row['title'], row['author'], row['subject'], row['description'], row['size_bytes'],
+                         row['url_external'], row['uploaded_at'], row['uploaded_by']) for row in rows]
     except Exception as e:
         logger.error(f"Error searching books with query '{query}': {e}")
         return []
@@ -356,8 +541,13 @@ async def get_all_subjects() -> List[str]:
     """Get all unique subjects/categories"""
     conn = await get_connection()
     try:
-        rows = await conn.fetch('SELECT DISTINCT subject FROM books WHERE subject IS NOT NULL')
-        subjects = [row['subject'] for row in rows if row['subject']]
+        if _use_sqlite:
+            cursor = await conn.execute('SELECT DISTINCT subject FROM books WHERE subject IS NOT NULL')
+            rows = await cursor.fetchall()
+            subjects = [row[0] for row in rows if row[0]]
+        else:
+            rows = await conn.fetch('SELECT DISTINCT subject FROM books WHERE subject IS NOT NULL')
+            subjects = [row['subject'] for row in rows if row['subject']]
         return sorted(subjects, key=str.lower)
     except Exception as e:
         logger.error(f"Error getting all subjects: {e}")
@@ -369,11 +559,17 @@ async def get_book(book_id: int) -> Optional[Book]:
     """Get a book by its ID"""
     conn = await get_connection()
     try:
-        row = await conn.fetchrow('SELECT * FROM books WHERE book_id = $1', book_id)
-        if row:
-            return Book(row['book_id'], row['file_id_telegram'], row['file_hash_sha256'],
-                       row['title'], row['author'], row['subject'], row['size_bytes'],
-                       row['url_external'], row['uploaded_at'], row['uploaded_by'])
+        if _use_sqlite:
+            cursor = await conn.execute('SELECT * FROM books WHERE book_id = ?', (book_id,))
+            row = await cursor.fetchone()
+            if row:
+                return Book(row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10])
+        else:
+            row = await conn.fetchrow('SELECT * FROM books WHERE book_id = $1', book_id)
+            if row:
+                return Book(row['book_id'], row['file_id_telegram'], row['file_hash_sha256'],
+                           row['title'], row['author'], row['subject'], row['description'], row['size_bytes'],
+                           row['url_external'], row['uploaded_at'], row['uploaded_by'])
         return None
     except Exception as e:
         logger.error(f"Error getting book {book_id}: {e}")
@@ -404,15 +600,63 @@ async def get_all_books(offset: int = 0, limit: int = 10) -> List[Book]:
         if _use_sqlite:
             cursor = await conn.execute('SELECT * FROM books ORDER BY uploaded_at DESC LIMIT ? OFFSET ?', (limit, offset))
             rows = await cursor.fetchall()
+            return [Book(row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10]) for row in rows]
         else:
             rows = await conn.fetch('SELECT * FROM books ORDER BY uploaded_at DESC LIMIT $1 OFFSET $2', limit, offset)
-
-        return [Book(row['book_id'], row['file_id_telegram'], row['file_hash_sha256'],
-                    row['title'], row['author'], row['subject'], row['size_bytes'],
-                    row['url_external'], row['uploaded_at'], row['uploaded_by']) for row in rows]
+            return [Book(row['book_id'], row['file_id_telegram'], row['file_hash_sha256'],
+                         row['title'], row['author'], row['subject'], row['description'], row['size_bytes'],
+                         row['url_external'], row['uploaded_at'], row['uploaded_by']) for row in rows]
     except Exception as e:
         logger.error(f"Error getting all books: {e}")
         return []
+    finally:
+        await release_connection(conn)
+
+async def update_book_subject(book_id: int, new_subject: str):
+    """Update the subject/category of a book"""
+    conn = await get_connection()
+    try:
+        if _use_sqlite:
+            await conn.execute('UPDATE books SET subject = ? WHERE book_id = ?', (new_subject.lower().strip(), book_id))
+            await conn.commit()
+        else:
+            await conn.execute('UPDATE books SET subject = $1 WHERE book_id = $2', new_subject.lower().strip(), book_id)
+        logger.info(f"✅ Book {book_id} subject updated to '{new_subject}'")
+    except Exception as e:
+        logger.error(f"Error updating book {book_id} subject: {e}")
+        raise
+    finally:
+        await release_connection(conn)
+
+async def update_book_description(book_id: int, new_description: str):
+    """Update the description of a book"""
+    conn = await get_connection()
+    try:
+        if _use_sqlite:
+            await conn.execute('UPDATE books SET description = ? WHERE book_id = ?', (new_description, book_id))
+            await conn.commit()
+        else:
+            await conn.execute('UPDATE books SET description = $1 WHERE book_id = $2', new_description, book_id)
+        logger.info(f"✅ Book {book_id} description updated")
+    except Exception as e:
+        logger.error(f"Error updating book {book_id} description: {e}")
+        raise
+    finally:
+        await release_connection(conn)
+
+async def delete_book(book_id: int):
+    """Delete a book from the database"""
+    conn = await get_connection()
+    try:
+        if _use_sqlite:
+            await conn.execute('DELETE FROM books WHERE book_id = ?', (book_id,))
+            await conn.commit()
+        else:
+            await conn.execute('DELETE FROM books WHERE book_id = $1', book_id)
+        logger.info(f"✅ Book {book_id} deleted successfully")
+    except Exception as e:
+        logger.error(f"Error deleting book {book_id}: {e}")
+        raise
     finally:
         await release_connection(conn)
 
@@ -449,7 +693,7 @@ async def increment_unauthorized_attempts(user_id: int) -> bool:
         user = await get_unauthorized_user(user_id)
         if user:
             new_attempts = user.attempts + 1
-            is_blocked = new_attempts >= 3
+            is_blocked = new_attempts >= 2
             if _use_sqlite:
                 await conn.execute(
                     'UPDATE unauthorized_users SET attempts = ?, last_attempt = CURRENT_TIMESTAMP, is_blocked = ? WHERE user_id_telegram = ?',

@@ -1,0 +1,32 @@
+-----------------------------------------
+👉 MÉTODO MÁS FÁCIL (RECOMENDADO):
+Solo haz DOBLE CLIC en el archivo: iniciar_bot.bat
+-----------------------------------------
+
+Este archivo hará TODO por ti de forma segura:
+1. Creará un "Entorno Virtual" (una carpeta 'venv') para no ensuciar tu PC.
+2. Instalará automáticamente todas las librerías necesarias.
+3. Te pedirá el TOKEN si no lo has puesto.
+4. Iniciará el bot.
+
+Si prefieres hacerlo manualmente, sigue estos pasos:
+
+1. INSTALAR PYTHON
+   Usa preferiblemente la versión 3.12 (descárgala de python.org).
+
+2. INSTALAR LIBRERÍAS
+   pip install -r requirements.txt
+
+3. CONFIGURAR CREDENCIALES
+   - Busca el archivo ".env.example" y cámbiale el nombre a ".env"
+   - Abre ".env" y pon tu BOT_TOKEN y tu ADMIN_IDS.
+
+4. INICIAR EL BOT
+   python bot.py
+
+-----------------------------------------
+¿TIENES ERRORES?
+- Si falla la base de datos PostgreSQL: El bot intentará usar SSL automáticamente.
+- Si no tienes base de datos: El bot creará una local (biblio_bot.db).
+- Si usas Python 3.14: Instala "C++ Build Tools" o cambia a Python 3.12.
+=========================================

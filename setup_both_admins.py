@@ -17,7 +17,7 @@ async def main():
     
     for admin_id in admin_ids:
         try:
-            await add_user(admin_id, 'admin', 'system')
+            await add_user(admin_id, None, 'admin', 'system')
             print(f"✅ Admin {admin_id} agregado")
         except Exception as e:
             print(f"ℹ️  Admin {admin_id} ya existe o error: {e}")

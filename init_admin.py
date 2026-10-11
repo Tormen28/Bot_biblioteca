@@ -17,7 +17,7 @@ async def main():
     first_admin_id = int(admin_ids_str.split(',')[0].strip())
     
     try:
-        await add_user(first_admin_id, 'admin', 'system')
+        await add_user(first_admin_id, None, 'admin', 'system')
         print(f"✅ Admin {first_admin_id} agregado.")
     except Exception as e:
         print(f"ℹ️ Admin {first_admin_id} ya existe o error: {e}")
